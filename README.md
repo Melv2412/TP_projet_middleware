@@ -28,7 +28,7 @@ Le bus **transforme** les formats, **route** les messages et **orchestre** le pa
 3. [Lancer le projet](#3-lancer-le-projet)
 4. [Les écrans](#4-les-écrans)
 5. [Workflow de démonstration](#5-workflow-de-démonstration)
-6. [Le jour de la soutenance](#6-le-jour-de-la-soutenance)
+6. [Le jour de la présentation](#6-le-jour-de-la-présentation)
 7. [Tests](#7-tests)
 8. [Architecture et patterns EIP](#8-architecture-et-patterns-eip)
 9. [Structure du dépôt](#9-structure-du-dépôt)
@@ -244,7 +244,7 @@ Toute la démo peut être faite sans les écrans : voir **[readme_workflow_TERMI
 
 ---
 
-## 6. Le jour de la soutenance
+## 6. Le jour de la présentation
 
 | Quand | Quoi |
 |---|---|
