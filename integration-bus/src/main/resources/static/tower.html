@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIDAM Control Tower</title>
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/assets/sidam.js"></script>
+  <style>
+    .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    @keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+    .node-flash { animation: flash 0.9s ease-out forwards; }
+    @keyframes rowIn { from { background: rgba(34, 211, 238, 0.18); } to { background: transparent; } }
+    .row-new { animation: rowIn 1.5s ease-out; }
+    pre { tab-size: 2; }
+  </style>
+</head>
+<body class="min-h-screen bg-[#070b17] text-slate-200 antialiased">
+<div class="max-w-[1500px] mx-auto px-4 py-4 space-y-4">
+
+  <!-- En-tête -->
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <a href="/" class="text-xs text-slate-500 hover:text-slate-300">← SIDAM CONNECT</a>
+      <h1 class="text-2xl font-bold tracking-wide text-white">SIDAM CONTROL TOWER</h1>
+      <p class="text-xs text-slate-400">Supervision des flux d'intégration · Apache Camel · RabbitMQ · PostgreSQL</p>
+    </div>
+    <div class="flex items-center gap-2 text-xs">
+      <span id="erpPill" class="rounded-full px-3 py-1 border border-slate-700">ERP …</span>
+      <span id="livePill" class="rounded-full px-3 py-1 border border-slate-700 text-slate-400">● Connexion…</span>
+    </div>
+  </header>
+
+  <!-- KPI -->
+  <section class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">Commandes traitées</p><p id="kTotal" class="mt-1 text-3xl font-bold text-white">—</p></div>
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">Traitées sans erreur</p><p id="kRate" class="mt-1 text-3xl font-bold text-emerald-300">—</p></div>
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">Livrées</p><p id="kDelivered" class="mt-1 text-3xl font-bold text-cyan-300">—</p></div>
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">En transit / livraison</p><p id="kTransit" class="mt-1 text-3xl font-bold text-violet-300">—</p></div>
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">Latence moy. (reçue → facturée)</p><p id="kLatency" class="mt-1 text-3xl font-bold text-white">—</p></div>
+    <div class="kpi rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-[11px] uppercase tracking-wider text-slate-400">Dead Letter Queue</p><p id="kDlq" class="mt-1 text-3xl font-bold text-white">—</p></div>
+  </section>
+  <p class="text-[11px] text-slate-500 -mt-2">Toutes les valeurs sont calculées sur les commandes et événements réellement traités (rien n'est codé en dur). <span id="kRejected"></span></p>
+
+  <div class="grid gap-4 xl:grid-cols-3">
+    <!-- Colonne principale -->
+    <div class="xl:col-span-2 space-y-4">
+
+      <!-- Live Flow Map -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Live Flow Map</h2>
+          <span class="text-[11px] text-slate-500">Chaque point = un message réellement traité</span>
+        </div>
+        <svg id="flow" viewBox="0 0 820 300" class="w-full h-auto mt-2 select-none"></svg>
+      </section>
+
+      <!-- Event Stream -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Event Stream</h2>
+          <input id="filter" placeholder="Filtrer : CMD-2026-0001, Splitter, RETRYING…" class="w-72 max-w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-1.5 text-xs focus:outline-none focus:border-cyan-500">
+        </div>
+        <div class="mt-3 max-h-[360px] overflow-y-auto scroll-thin">
+          <table class="w-full text-xs">
+            <thead class="sticky top-0 bg-slate-900 text-slate-400 text-left">
+              <tr><th class="py-1.5 pr-2 font-medium">Heure</th><th class="pr-2 font-medium">Commande</th><th class="pr-2 font-medium">Statut</th><th class="pr-2 font-medium">Pattern EIP</th><th class="pr-2 font-medium">Flux</th><th class="font-medium">Détail</th></tr>
+            </thead>
+            <tbody id="stream" class="divide-y divide-slate-800/70"></tbody>
+          </table>
+          <p id="streamEmpty" class="py-6 text-center text-slate-500 text-sm">Aucun événement pour l'instant. Passez une commande depuis le Store.</p>
+        </div>
+      </section>
+
+      <!-- Order Journey + Message Inspector -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Order Journey &amp; Message Inspector</h2>
+          <select id="orderSelect" class="rounded-lg bg-slate-950 border border-slate-700 px-3 py-1.5 text-xs focus:outline-none focus:border-cyan-500"></select>
+        </div>
+        <div id="journeyHead" class="mt-3 text-xs text-slate-400">Sélectionnez une commande (ou cliquez sur une référence dans le journal).</div>
+        <div class="mt-3 grid gap-4 lg:grid-cols-5">
+          <ol id="journey" class="lg:col-span-2 space-y-1 max-h-[420px] overflow-y-auto scroll-thin pr-1"></ol>
+          <div class="lg:col-span-3 space-y-3">
+            <div id="formats" class="grid gap-3 md:grid-cols-3"></div>
+            <div>
+              <p id="inspectorTitle" class="text-[11px] uppercase tracking-wider text-slate-400">Message sélectionné</p>
+              <pre id="inspector" class="mt-1 max-h-[260px] overflow-auto scroll-thin rounded-lg bg-slate-950 border border-slate-800 p-3 text-[11px] text-cyan-100 whitespace-pre-wrap">—</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Colonne latérale -->
+    <aside class="space-y-4">
+      <!-- Simulation Lab -->
+      <section class="rounded-xl border border-violet-500/30 bg-violet-950/20 p-4">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-violet-200">Simulation Lab <span class="ml-1 text-[10px] font-normal normal-case text-violet-300/70">mode démo</span></h2>
+        <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <button id="btnErp" class="col-span-2 rounded-lg px-3 py-2 font-semibold bg-rose-600 hover:bg-rose-500 text-white">Couper l'ERP</button>
+          <button data-act="order" class="rounded-lg px-3 py-2 bg-slate-800 hover:bg-slate-700">Commande test<br><span class="text-[10px] text-slate-400">TV + Frigo</span></button>
+          <button data-act="rupture" class="rounded-lg px-3 py-2 bg-slate-800 hover:bg-slate-700">Commande en rupture<br><span class="text-[10px] text-slate-400">5 lave-linge</span></button>
+          <button data-act="malformed" class="rounded-lg px-3 py-2 bg-slate-800 hover:bg-slate-700">JSON corrompu<br><span class="text-[10px] text-slate-400">injecté dans RabbitMQ</span></button>
+          <button data-act="incomplete" class="rounded-lg px-3 py-2 bg-slate-800 hover:bg-slate-700">Commande vide<br><span class="text-[10px] text-slate-400">injectée dans RabbitMQ</span></button>
+          <button data-act="duplicate" class="col-span-2 rounded-lg px-3 py-2 bg-slate-800 hover:bg-slate-700">Renvoyer en double la commande sélectionnée</button>
+        </div>
+        <div class="mt-3 flex items-center gap-2 text-xs">
+          <select id="stockSku" class="flex-1 rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"></select>
+          <input id="stockQty" type="number" min="0" value="1" class="w-16 rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5">
+          <button data-act="stock" class="rounded-lg px-3 py-1.5 bg-slate-800 hover:bg-slate-700">Fixer le stock</button>
+        </div>
+        <button data-act="reset" class="mt-3 w-full rounded-lg px-3 py-1.5 text-xs border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500">Réinitialiser la démo</button>
+        <p id="labMsg" class="mt-2 min-h-[1rem] text-[11px] text-violet-200"></p>
+      </section>
+
+      <!-- Dead Letter Queue -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Dead Letter Queue</h2>
+          <span id="dlqDepth" class="text-[11px] text-slate-500"></span>
+        </div>
+        <ul id="dlq" class="mt-3 space-y-2 max-h-[340px] overflow-y-auto scroll-thin"></ul>
+      </section>
+
+      <!-- System Health -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">System Health</h2>
+        <div id="health" class="mt-3 space-y-3 text-xs"></div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+(() => {
+  const { api, connectLive, debounce, esc, money, time, pretty, tone } = Sidam;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------------------------------------------------------- Live Flow Map
+  const NODES = {
+    STORE:    { x: 90,  y: 150, label: 'SIDAM STORE', sub: 'JSON',          color: '#60a5fa' },
+    RABBITMQ: { x: 270, y: 150, label: 'RABBITMQ',    sub: 'files durables', color: '#fb923c' },
+    BUS:      { x: 460, y: 150, label: 'APACHE CAMEL', sub: 'EIP · routage', color: '#22d3ee' },
+    ERP:      { x: 700, y: 62,  label: 'LEGACY ERP',  sub: 'XML · CSV',     color: '#fbbf24' },
+    DELIVERY: { x: 700, y: 238, label: 'DELIVERY',    sub: 'JSON',          color: '#34d399' },
+    DLQ:      { x: 460, y: 268, label: 'DLQ',         sub: 'messages en échec', color: '#fb7185' }
+  };
+  const ALIAS = { ERP_CSV: 'ERP' };
+  const EDGES = [['STORE', 'RABBITMQ'], ['RABBITMQ', 'BUS'], ['BUS', 'ERP'], ['BUS', 'DELIVERY'], ['BUS', 'DLQ'], ['DLQ', 'RABBITMQ']];
+  const svg = $('flow');
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent = svg) => {
+    const e = document.createElementNS(NS, tag);
+    Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+    parent.appendChild(e);
+    return e;
+  };
+  const counters = {};
+  EDGES.forEach(([a, b]) => el('line', { x1: NODES[a].x, y1: NODES[a].y, x2: NODES[b].x, y2: NODES[b].y,
+    stroke: '#1e3a5f', 'stroke-width': 2, 'stroke-dasharray': b === 'DLQ' || a === 'DLQ' ? '4 4' : '' }));
+  Object.entries(NODES).forEach(([id, n]) => {
+    const g = el('g', { id: 'node-' + id });
+    n.ring = el('rect', { x: n.x - 72, y: n.y - 30, width: 144, height: 60, rx: 12, fill: n.color, opacity: 0 }, g);
+    n.box = el('rect', { x: n.x - 70, y: n.y - 28, width: 140, height: 56, rx: 11, fill: '#0f1b33', stroke: n.color, 'stroke-opacity': 0.6, 'stroke-width': 1.5 }, g);
+    const t = el('text', { x: n.x, y: n.y - 6, 'text-anchor': 'middle', fill: '#e2e8f0', 'font-size': 12, 'font-weight': 700, 'letter-spacing': 0.5 }, g);
+    t.textContent = n.label;
+    const s = el('text', { x: n.x, y: n.y + 9, 'text-anchor': 'middle', fill: n.color, 'font-size': 10 }, g);
+    s.textContent = n.sub;
+    counters[id] = el('text', { x: n.x, y: n.y + 22, 'text-anchor': 'middle', fill: '#64748b', 'font-size': 9 }, g);
+    counters[id].textContent = '0 msg';
+    n.count = 0;
+  });
+
+  const COLORS = { ok: '#34d399', error: '#fb7185', warn: '#fbbf24', info: '#22d3ee' };
+  function flowPulse(ev) {
+    const from = NODES[ALIAS[ev.source] || ev.source];
+    const to = NODES[ALIAS[ev.destination] || ev.destination];
+    const color = COLORS[tone(ev.status)];
+    if (!from || !to || from === to) {
+      if (to || from) flash(to || from, color);
+      return;
+    }
+    const dot = el('circle', { r: 6, fill: color, cx: from.x, cy: from.y });
+    dot.style.filter = `drop-shadow(0 0 6px ${color})`;
+    const start = performance.now();
+    const dur = 750;
+    (function step(now) {
+      const p = Math.min((now - start) / dur, 1);
+      const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      dot.setAttribute('cx', from.x + (to.x - from.x) * e);
+      dot.setAttribute('cy', from.y + (to.y - from.y) * e);
+      if (p < 1) requestAnimationFrame(step);
+      else { dot.remove(); flash(to, color); }
+    })(start);
+  }
+  function flash(node, color) {
+    node.count++;
+    const id = Object.keys(NODES).find((k) => NODES[k] === node);
+    counters[id].textContent = node.count + ' msg';
+    node.ring.setAttribute('fill', color);
+    node.ring.classList.remove('node-flash');
+    void node.ring.getBBox();
+    node.ring.classList.add('node-flash');
+  }
+  function setErpNode(up) {
+    NODES.ERP.box.setAttribute('stroke', up ? NODES.ERP.color : '#fb7185');
+    NODES.ERP.box.setAttribute('stroke-dasharray', up ? '' : '6 4');
+    NODES.ERP.box.setAttribute('fill', up ? '#0f1b33' : '#3b0d1a');
+  }
+
+  // ---------------------------------------------------------------- Event Stream
+  const BADGE = {
+    ok: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    error: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+    warn: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    info: 'bg-cyan-500/10 text-cyan-200 border-cyan-500/20'
+  };
+  const badge = (s) => `<span class="inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold ${BADGE[tone(s)]}">${esc(s)}</span>`;
+  const stream = $('stream');
+  const allEvents = [];
+
+  function matches(ev) {
+    const q = $('filter').value.trim().toLowerCase();
+    if (!q) return true;
+    return [ev.order_id, ev.status, ev.pattern, ev.message, ev.source, ev.destination]
+      .some((v) => v && String(v).toLowerCase().includes(q));
+  }
+  function row(ev, isNew) {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-800/40 cursor-pointer' + (isNew ? ' row-new' : '');
+    tr.innerHTML = `<td class="py-1.5 pr-2 font-mono text-slate-400 whitespace-nowrap">${time(ev.created_at)}</td>
+      <td class="pr-2 font-mono whitespace-nowrap">${ev.order_id ? `<a class="text-cyan-300 hover:underline" data-order="${esc(ev.order_id)}">${esc(ev.order_id)}</a>` : '<span class="text-slate-500">—</span>'}</td>
+      <td class="pr-2">${badge(ev.status)}${ev.attempt > 1 ? ` <span class="text-amber-300">#${ev.attempt}</span>` : ''}</td>
+      <td class="pr-2 text-violet-300 whitespace-nowrap">${esc(ev.pattern || '')}</td>
+      <td class="pr-2 text-slate-500 whitespace-nowrap font-mono text-[10px]">${esc(ev.source || '')}${ev.destination ? ' → ' + esc(ev.destination) : ''}</td>
+      <td class="text-slate-300"><span class="line-clamp-2" title="${esc(ev.message || '')}">${esc(ev.message || '')}</span></td>`;
+    tr.addEventListener('click', (e) => {
+      const order = e.target.dataset.order;
+      if (order) selectOrder(order);
+      else inspect(ev);
+    });
+    return tr;
+  }
+  function renderStream() {
+    stream.innerHTML = '';
+    allEvents.filter(matches).slice(-200).reverse().forEach((ev) => stream.appendChild(row(ev, false)));
+    $('streamEmpty').classList.toggle('hidden', allEvents.length > 0);
+  }
+  $('filter').addEventListener('input', debounce(renderStream, 150));
+
+  // ---------------------------------------------------------------- Inspector + Journey
+  let selectedOrder = null;
+  let journeyEvents = [];
+
+  function inspect(ev) {
+    $('inspectorTitle').textContent = `Message · ${ev.status} · ${ev.pattern || ''} ${ev.payload_format ? '(' + ev.payload_format + ')' : ''}`;
+    $('inspector').textContent = ev.payload ? pretty(ev.payload, ev.payload_format) : (ev.message || '—');
+  }
+
+  function formatCard(title, ev, accent) {
+    if (!ev) return `<div class="rounded-lg border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-600">${title}<br>—</div>`;
+    return `<button class="text-left rounded-lg border ${accent} bg-slate-950/60 p-2 hover:bg-slate-900" data-event="${esc(ev.event_id)}">
+      <p class="text-[10px] uppercase tracking-wider text-slate-400">${title}</p>
+      <pre class="mt-1 max-h-36 overflow-hidden text-[10px] leading-snug text-slate-200 whitespace-pre-wrap">${esc(pretty(ev.payload, ev.payload_format).slice(0, 600))}</pre></button>`;
+  }
+
+  async function selectOrder(orderId) {
+    selectedOrder = orderId;
+    $('orderSelect').value = orderId;
+    const [order, events] = await Promise.all([api('/api/orders/' + orderId), api(`/api/orders/${orderId}/events`)]);
+    journeyEvents = events;
+    renderJourney(order);
+  }
+
+  function renderJourney(order) {
+    const evs = journeyEvents;
+    const first = evs[0] ? new Date(evs[0].created_at) : null;
+    const last = evs.length ? new Date(evs[evs.length - 1].created_at) : null;
+    if (order) {
+      $('journeyHead').innerHTML = `<span class="font-mono text-white">${esc(order.order_id)}</span> · ${badge(order.status)}
+        · ${money(order.total)} · ${evs.length} étapes · ${first ? ((last - first) / 1000).toFixed(2) + ' s' : ''}
+        <br><span class="text-slate-500">correlationId</span> <span class="font-mono text-slate-300">${esc(order.correlation_id)}</span>
+        ${order.status_reason ? `<br><span class="text-rose-300">${esc(order.status_reason)}</span>` : ''}`;
+    }
+    let prev = null;
+    $('journey').innerHTML = evs.map((ev) => {
+      const t = new Date(ev.created_at);
+      const delta = prev ? '+' + (t - prev) + ' ms' : '';
+      prev = t;
+      const dot = { ok: 'bg-emerald-400', error: 'bg-rose-400', warn: 'bg-amber-400', info: 'bg-cyan-400' }[tone(ev.status)];
+      return `<li><button data-event="${esc(ev.event_id)}" class="w-full text-left flex gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-800/60">
+        <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot}"></span>
+        <span class="min-w-0"><span class="text-[11px] font-semibold text-white">${esc(ev.status)}</span>
+          <span class="text-[10px] text-violet-300">${esc(ev.pattern || '')}</span>
+          <span class="block text-[10px] text-slate-400 truncate">${esc(ev.message || '')}</span>
+          <span class="block text-[10px] font-mono text-slate-500">${time(ev.created_at)} ${delta}</span></span></button></li>`;
+    }).join('');
+
+    // Comparaison des formats : ce que chaque système a réellement envoyé / reçu
+    const storeJson = evs.find((e) => e.status === 'RECEIVED' && e.payload);
+    const canonical = evs.find((e) => e.status === 'TRANSFORMED' && e.payload_format === 'JSON');
+    const erpXml = evs.find((e) => e.status === 'TRANSFORMED' && e.payload_format === 'XML' && /^<commande/.test(e.payload || ''));
+    const delivery = evs.find((e) => e.status === 'DISPATCHED' && e.payload);
+    $('formats').innerHTML =
+      formatCard(storeJson && storeJson.payload_format === 'CSV' ? 'Entrée CSV (ERP)' : 'Entrée Store (JSON)', storeJson, 'border-blue-500/40') +
+      formatCard('Modèle canonique (JSON)', canonical, 'border-cyan-500/40') +
+      formatCard('Sortie ERP legacy (XML)', erpXml, 'border-amber-500/40');
+    if (delivery && !erpXml) $('formats').innerHTML += formatCard('Mission livreur (JSON)', delivery, 'border-emerald-500/40');
+    const best = erpXml || canonical || storeJson;
+    if (best) inspect(best);
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-event]');
+    if (!btn) return;
+    const ev = journeyEvents.find((x) => x.event_id === btn.dataset.event) || allEvents.find((x) => x.event_id === btn.dataset.event);
+    if (ev) inspect(ev);
+  });
+
+  async function loadOrders() {
+    const orders = await api('/api/orders');
+    const sel = $('orderSelect');
+    sel.innerHTML = '<option value="">— Choisir une commande —</option>' +
+      orders.slice(0, 50).map((o) => `<option value="${esc(o.order_id)}">${esc(o.order_id)} · ${esc(o.status)}</option>`).join('');
+    if (selectedOrder) sel.value = selectedOrder;
+  }
+  $('orderSelect').addEventListener('change', (e) => e.target.value && selectOrder(e.target.value));
+
+  // ---------------------------------------------------------------- KPI, santé, DLQ
+  async function loadMetrics() {
+    const m = await api('/api/tower/metrics');
+    $('kTotal').textContent = m.total;
+    $('kRate').textContent = m.successRate === null ? '—' : m.successRate + ' %';
+    $('kDelivered').textContent = m.delivered;
+    $('kTransit').textContent = (Number(m.in_transit) + Number(m.in_delivery));
+    $('kLatency').textContent = m.avgLatencyMs === null ? '—' : m.avgLatencyMs + ' ms';
+    $('kDlq').textContent = m.dlqPending;
+    $('kDlq').className = 'mt-1 text-3xl font-bold ' + (m.dlqPending > 0 ? 'text-rose-400' : 'text-white');
+    $('kRejected').textContent = `${m.accepted} acceptée(s), ${m.rejected} refusée(s) pour rupture, ${m.failed} en échec technique · ${m.events} événements journalisés.`;
+  }
+
+  let erpUp = true;
+  async function loadHealth() {
+    const h = await api('/api/tower/health');
+    erpUp = h.erpAvailable;
+    setErpNode(erpUp);
+    $('erpPill').className = 'rounded-full px-3 py-1 border ' + (erpUp ? 'border-emerald-500/40 text-emerald-300' : 'border-rose-500/60 text-rose-300 bg-rose-500/10');
+    $('erpPill').textContent = erpUp ? '● ERP disponible' : '● ERP INDISPONIBLE (panne simulée)';
+    $('btnErp').textContent = erpUp ? "Couper l'ERP" : "Rétablir l'ERP";
+    $('btnErp').className = 'col-span-2 rounded-lg px-3 py-2 font-semibold text-white ' + (erpUp ? 'bg-rose-600 hover:bg-rose-500' : 'bg-emerald-600 hover:bg-emerald-500');
+    const dot = (b) => `<span class="${b ? 'text-emerald-400' : 'text-rose-400'}">●</span>`;
+    const started = h.camelRoutes.filter((r) => r.status === 'Started').length;
+    $('health').innerHTML = `
+      <div class="grid grid-cols-2 gap-1">
+        <span>${dot(h.database)} PostgreSQL</span><span>${dot(h.rabbitmq)} RabbitMQ</span>
+        <span>${dot(h.erpAvailable)} ERP legacy</span><span>${dot(started === h.camelRoutes.length)} Camel ${started}/${h.camelRoutes.length} routes</span>
+      </div>
+      <div><p class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Files RabbitMQ (messages en attente)</p>
+        ${Object.entries(h.queues).map(([q, n]) => `<div class="flex justify-between font-mono text-[11px]"><span class="text-slate-400">${esc(q)}</span><span class="${n > 0 ? (q.endsWith('dlq') ? 'text-rose-300' : 'text-amber-300') : 'text-slate-500'}">${n === null ? '?' : n}</span></div>`).join('')}</div>
+      <details><summary class="cursor-pointer text-[10px] uppercase tracking-wider text-slate-500">Routes Camel</summary>
+        ${h.camelRoutes.map((r) => `<div class="flex justify-between font-mono text-[10px] mt-0.5"><span>${esc(r.id)}</span><span class="${r.status === 'Started' ? 'text-emerald-400' : 'text-rose-400'}">${esc(r.status)}</span></div>`).join('')}</details>
+      <p class="text-[10px] text-slate-500">${h.connectedScreens} écran(s) connecté(s) en temps réel</p>`;
+  }
+
+  async function loadDlq() {
+    const d = await api('/api/dlq');
+    $('dlqDepth').textContent = `${d.queueDepth} message(s) dans sidam.orders.dlq`;
+    const pending = d.messages.filter((m) => !m.replayed_at);
+    const done = d.messages.filter((m) => m.replayed_at).slice(0, 3);
+    if (!d.messages.length) {
+      $('dlq').innerHTML = '<li class="text-xs text-slate-500">Aucun message en échec.</li>';
+      return;
+    }
+    $('dlq').innerHTML = pending.map((m) => `
+      <li class="rounded-lg border border-rose-500/30 bg-rose-950/20 p-2 text-xs">
+        <div class="flex items-center justify-between gap-2">
+          <span class="font-mono ${m.order_id ? 'text-white' : 'text-slate-400'}">${esc(m.order_id || 'message illisible')}</span>
+          <span class="rounded bg-rose-500/20 px-1.5 text-[10px] font-semibold text-rose-200">${esc(m.error_code)}</span>
+        </div>
+        <p class="mt-1 text-[11px] text-slate-300 break-words line-clamp-3" title="${esc(m.reason)}">${esc(m.reason)}</p>
+        <p class="text-[10px] text-slate-500">${time(m.created_at)} · route ${esc(m.failed_route || '?')} · retour vers ${esc(m.replay_routing_key)}</p>
+        <div class="mt-2 flex gap-2">
+          <button data-replay="${esc(m.dlq_id)}" class="rounded-md bg-cyan-600 hover:bg-cyan-500 px-3 py-1 text-[11px] font-semibold text-white">Replay</button>
+          <button data-show="${esc(m.dlq_id)}" class="rounded-md border border-slate-700 px-3 py-1 text-[11px] text-slate-300 hover:bg-slate-800">Voir le message</button>
+        </div>
+      </li>`).join('') + done.map((m) => `
+      <li class="rounded-lg border border-slate-800 p-2 text-[11px] text-slate-500">
+        <span class="font-mono">${esc(m.order_id || 'message illisible')}</span> · ${esc(m.error_code)} · rejoué à ${time(m.replayed_at)}
+      </li>`).join('');
+    $('dlq').querySelectorAll('[data-replay]').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = '…';
+      try { await api(`/api/dlq/${b.dataset.replay}/replay`, { method: 'POST' }); lab('Message rejoué depuis la DLQ.'); }
+      catch (e) { lab(e.message, true); }
+      refresh();
+    }));
+    $('dlq').querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
+      const m = d.messages.find((x) => x.dlq_id === b.dataset.show);
+      $('inspectorTitle').textContent = 'Message en DLQ · ' + m.error_code;
+      $('inspector').textContent = pretty(m.payload, 'JSON') || '(vide)';
+      $('inspector').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+  }
+
+  const refresh = debounce(() => {
+    loadMetrics().catch(console.error);
+    loadHealth().catch(console.error);
+    loadDlq().catch(console.error);
+  }, 400);
+
+  // ---------------------------------------------------------------- Simulation Lab
+  function lab(text, isError) {
+    $('labMsg').textContent = text;
+    $('labMsg').className = 'mt-2 min-h-[1rem] text-[11px] ' + (isError ? 'text-rose-300' : 'text-violet-200');
+  }
+  $('btnErp').addEventListener('click', async () => {
+    await api('/api/demo/erp/' + (erpUp ? 'down' : 'up'), { method: 'POST' });
+    lab(erpUp ? "ERP coupé : les prochaines commandes vont être retentées puis isolées en DLQ." : 'ERP rétabli.');
+    loadHealth();
+  });
+  document.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      switch (b.dataset.act) {
+        case 'order': {
+          const r = await api('/api/orders', { json: { customerId: 'CLI-001', shippingAddress: 'Cocody, Abidjan',
+            items: [{ sku: 'TV-SAM-55', quantity: 1 }, { sku: 'FR-LG-01', quantity: 1 }] } });
+          lab('Commande ' + r.orderId + ' envoyée.'); selectOrder(r.orderId); break;
+        }
+        case 'rupture': {
+          const r = await api('/api/orders', { json: { customerId: 'CLI-002', shippingAddress: 'Yopougon, Abidjan', items: [{ sku: 'LAVE-01', quantity: 5 }] } });
+          lab('Commande ' + r.orderId + ' envoyée (5 lave-linge).'); selectOrder(r.orderId); break;
+        }
+        case 'malformed': await api('/api/demo/corrupt-message?type=malformed', { method: 'POST' }); lab('JSON corrompu injecté dans sidam.orders.incoming.'); break;
+        case 'incomplete': await api('/api/demo/corrupt-message?type=incomplete', { method: 'POST' }); lab('Commande vide injectée dans sidam.orders.incoming.'); break;
+        case 'duplicate':
+          if (!selectedOrder) { lab("Sélectionnez d'abord une commande.", true); return; }
+          await api(`/api/demo/orders/${selectedOrder}/duplicate`, { method: 'POST' }); lab('Doublon de ' + selectedOrder + ' publié.'); break;
+        case 'stock':
+          await api(`/api/demo/stock/${$('stockSku').value}?available=${$('stockQty').value}`, { method: 'POST' });
+          lab(`Stock ${$('stockSku').value} fixé à ${$('stockQty').value}.`); break;
+        case 'reset':
+          if (!confirm('Réinitialiser toutes les données de démonstration ?')) return;
+          await api('/api/demo/reset', { method: 'POST' });
+          allEvents.length = 0; journeyEvents = []; selectedOrder = null;
+          Object.values(NODES).forEach((n) => { n.count = 0; });
+          Object.values(counters).forEach((c) => { c.textContent = '0 msg'; });
+          $('journey').innerHTML = ''; $('formats').innerHTML = ''; $('inspector').textContent = '—';
+          $('journeyHead').textContent = 'Sélectionnez une commande.';
+          renderStream(); loadOrders(); lab('Démo réinitialisée.'); break;
+      }
+      refresh();
+    } catch (e) { lab(e.message, true); }
+  }));
+
+  // ---------------------------------------------------------------- Temps réel
+  const reloadOrders = debounce(() => loadOrders().catch(console.error), 500);
+  connectLive((ev) => {
+    allEvents.push(ev);
+    if (allEvents.length > 1000) allEvents.splice(0, allEvents.length - 1000);
+    if (matches(ev)) {
+      stream.prepend(row(ev, true));
+      while (stream.children.length > 200) stream.lastChild.remove();
+      $('streamEmpty').classList.add('hidden');
+    }
+    flowPulse(ev);
+    if (ev.order_id && ev.order_id === selectedOrder) {
+      journeyEvents.push(ev);
+      api('/api/orders/' + selectedOrder).then(renderJourney).catch(() => renderJourney(null));
+    }
+    if (ev.status === 'RECEIVED' || tone(ev.status) !== 'info') reloadOrders();
+    refresh();
+  }, (up) => {
+    $('livePill').className = 'rounded-full px-3 py-1 border ' + (up ? 'border-cyan-500/40 text-cyan-300' : 'border-slate-700 text-slate-500');
+    $('livePill').textContent = up ? '● LIVE · WebSocket' : '● Reconnexion…';
+    if (up) refresh();
+  });
+
+  // ---------------------------------------------------------------- Chargement initial
+  (async () => {
+    const [events, catalog] = await Promise.all([api('/api/tower/events?limit=200'), api('/api/catalog').catch(() => [])]);
+    allEvents.push(...events);
+    renderStream();
+    // Les compteurs du graphe partent de l'historique déjà journalisé (sans animation).
+    events.forEach((ev) => {
+      const node = NODES[ALIAS[ev.destination] || ev.destination];
+      if (node) node.count++;
+    });
+    Object.entries(NODES).forEach(([id, n]) => { counters[id].textContent = n.count + ' msg'; });
+    $('stockSku').innerHTML = catalog.map((p) => `<option value="${esc(p.sku)}">${esc(p.sku)}</option>`).join('')
+      || '<option>LAVE-01</option><option>TV-SAM-55</option><option>FR-LG-01</option>';
+    await loadOrders();
+    const latest = events.filter((e) => e.order_id).pop();
+    if (latest) selectOrder(latest.order_id);
+    refresh();
+    setInterval(() => loadHealth().catch(() => {}), 5000);
+  })().catch((e) => lab('Bus injoignable : ' + e.message, true));
+})();
+</script>
+</body>
+</html>

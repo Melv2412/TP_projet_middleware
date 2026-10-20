@@ -1,0 +1,68 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      # Annonce "charset=UTF-8" dans chaque réponse : les accents sont lus correctement
+      # par tous les clients (dont PowerShell 5.1, qui sinon décode en ISO-8859-1).
+      charset: UTF-8
+      force-response: true
+
+spring:
+  application:
+    name: sidam-integration-bus
+  # Valeurs par défaut pour un lancement local ; surchargées par docker-compose.
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/sidam_db}
+    username: ${SPRING_DATASOURCE_USERNAME:admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:password}
+  flyway:
+    enabled: true
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${SPRING_RABBITMQ_USERNAME:sidam}
+    password: ${SPRING_RABBITMQ_PASSWORD:sidam}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+camel:
+  springboot:
+    name: sidam-camel
+    main-run-controller: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+sidam:
+  # Active les fonctions réservées à la démo (reset, simulation de pannes).
+  demo-mode: ${DEMO_MODE:true}
+  rabbit:
+    exchange: sidam.exchange
+    orders-queue: sidam.orders.incoming
+    orders-routing-key: order.submitted
+    concurrent-consumers: 3
+    # Livraison : aller (bus → app livreur) et retour (app livreur → bus)
+    delivery-assigned-queue: sidam.delivery.assigned
+    delivery-assigned-routing-key: delivery.assigned
+    delivery-status-queue: sidam.delivery.status
+    delivery-status-routing-key: delivery.status
+    # Dead Letter Queue : messages en échec après les tentatives
+    dead-letter-exchange: sidam.dlx
+    dead-letter-queue: sidam.orders.dlq
+    dead-letter-routing-key: order.dead
+  # Retry des erreurs techniques (ERP injoignable) : 2 s, 4 s, 8 s puis DLQ
+  retry:
+    max-attempts: 3
+    initial-delay-ms: 2000
+    multiplier: 2
+
+logging:
+  level:
+    com.sidam: INFO

@@ -1,0 +1,10 @@
+# Documents de travail personnels (sujet, maquettes)
+not_to_commit_not_to_push/
+
+# Build Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/

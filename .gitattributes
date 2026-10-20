@@ -1,0 +1,5 @@
+# Scripts shell : fins de ligne Unix, même après un clone sous Windows
+mvnw text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.png binary

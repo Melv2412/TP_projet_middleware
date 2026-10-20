@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIDAM Store</title>
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/assets/sidam.js"></script>
+</head>
+<body class="min-h-screen bg-[#f7f7f4] text-slate-800 antialiased">
+  <header class="bg-white border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-xl bg-blue-600 text-white grid place-items-center font-bold">S</div>
+        <div>
+          <p class="font-semibold leading-tight">SIDAM Store</p>
+          <p class="text-xs text-slate-500">Électroménager · livraison à Abidjan</p>
+        </div>
+      </div>
+      <a href="/" class="text-xs text-slate-400 hover:text-slate-600">SIDAM CONNECT</a>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-8 grid gap-8 lg:grid-cols-3">
+    <!-- Catalogue -->
+    <section class="lg:col-span-2">
+      <h1 class="text-2xl font-semibold">Nos produits</h1>
+      <p class="text-sm text-slate-500">Prix et disponibilités fournis en direct par le bus d'intégration (catalogue de l'ERP).</p>
+      <p id="catalogError" class="hidden mt-4 rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800"></p>
+      <div id="catalog" class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3"></div>
+
+      <h2 class="mt-12 text-lg font-semibold">Mes commandes</h2>
+      <div id="myOrders" class="mt-3 space-y-3"><p class="text-sm text-slate-500">Aucune commande pour l'instant.</p></div>
+    </section>
+
+    <!-- Panier -->
+    <aside class="lg:sticky lg:top-6 h-fit rounded-2xl bg-white border border-slate-200 p-5 shadow-sm">
+      <h2 class="font-semibold">Panier</h2>
+      <ul id="cart" class="mt-3 divide-y divide-slate-100 text-sm"></ul>
+      <p id="cartEmpty" class="mt-3 text-sm text-slate-500">Votre panier est vide.</p>
+      <div class="mt-4 flex justify-between font-semibold"><span>Total</span><span id="cartTotal">0 FCFA</span></div>
+      <div class="mt-4 space-y-2 text-sm">
+        <label class="block"><span class="text-xs text-slate-500">Identifiant client</span>
+          <input id="customer" value="CLI-001" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:border-blue-500"></label>
+        <label class="block"><span class="text-xs text-slate-500">Adresse de livraison</span>
+          <input id="address" value="Cocody, Abidjan" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:border-blue-500"></label>
+      </div>
+      <button id="checkout" class="mt-4 w-full rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 text-white font-semibold py-3">Commander</button>
+      <p class="mt-2 text-[11px] text-slate-400">Paiement simulé (démonstration). Le stock est vérifié par l'ERP après la commande.</p>
+      <p id="checkoutMsg" class="mt-2 text-sm"></p>
+    </aside>
+  </main>
+
+<script>
+(() => {
+  const { api, connectLive, debounce, esc, money, time, label } = Sidam;
+  const $ = (id) => document.getElementById(id);
+  let catalog = [];
+  const cart = new Map();       // sku -> quantité
+  let myOrders = [];
+
+  // Identifiants des commandes passées depuis ce navigateur (confort uniquement, facultatif).
+  try { myOrders = JSON.parse(localStorage.getItem('sidam.store.orders') || '[]'); } catch (e) { myOrders = []; }
+  const saveOrders = () => { try { localStorage.setItem('sidam.store.orders', JSON.stringify(myOrders.slice(0, 10))); } catch (e) { /* stockage indisponible */ } };
+
+  const ICONS = {
+    TV: '<path d="M4 6h16v10H4z" stroke-width="1.8"/><path d="M9 20h6M12 16v4" stroke-width="1.8"/>',
+    FR: '<rect x="6" y="3" width="12" height="18" rx="2" stroke-width="1.8"/><path d="M6 10h12M9 6v2M9 13v3" stroke-width="1.8"/>',
+    LAVE: '<rect x="5" y="3" width="14" height="18" rx="2" stroke-width="1.8"/><circle cx="12" cy="13" r="4" stroke-width="1.8"/><path d="M8 6h2" stroke-width="1.8"/>'
+  };
+  const icon = (sku) => `<svg viewBox="0 0 24 24" class="h-14 w-14 text-blue-600" fill="none" stroke="currentColor" stroke-linecap="round">${ICONS[sku.split('-')[0]] || ICONS.TV}</svg>`;
+
+  async function loadCatalog() {
+    try {
+      catalog = await api('/api/catalog');
+      $('catalogError').classList.add('hidden');
+    } catch (e) {
+      $('catalogError').textContent = e.message;
+      $('catalogError').classList.remove('hidden');
+    }
+    $('catalog').innerHTML = catalog.map((p) => `
+      <article class="rounded-2xl bg-white border border-slate-200 p-4 flex flex-col">
+        <div class="h-28 rounded-xl bg-blue-50 grid place-items-center">${icon(p.sku)}</div>
+        <h3 class="mt-3 font-medium leading-snug">${esc(p.name)}</h3>
+        <p class="text-xs text-slate-400 font-mono">${esc(p.sku)}</p>
+        <p class="mt-2 text-lg font-semibold">${money(p.price)}</p>
+        <p class="text-xs ${p.available > 0 ? 'text-emerald-600' : 'text-rose-600'}">${p.available > 0 ? p.available + ' en stock' : 'Rupture de stock'}</p>
+        <div class="mt-auto pt-3 flex items-center gap-2">
+          <input type="number" min="1" value="1" data-qty="${esc(p.sku)}" class="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm">
+          <button data-add="${esc(p.sku)}" class="flex-1 rounded-lg bg-slate-900 hover:bg-slate-700 text-white text-sm py-2">Ajouter</button>
+        </div>
+      </article>`).join('');
+    document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
+      const sku = b.dataset.add;
+      const qty = Math.max(1, parseInt(document.querySelector(`[data-qty="${sku}"]`).value, 10) || 1);
+      cart.set(sku, (cart.get(sku) || 0) + qty);
+      renderCart();
+    }));
+    renderCart();
+  }
+
+  function renderCart() {
+    const lines = [...cart.entries()].map(([sku, qty]) => ({ p: catalog.find((c) => c.sku === sku) || { sku, name: sku, price: 0 }, qty }));
+    $('cart').innerHTML = lines.map(({ p, qty }) => `
+      <li class="py-2 flex items-center justify-between gap-2">
+        <span class="min-w-0"><span class="block truncate">${esc(p.name)}</span><span class="text-xs text-slate-500">${qty} × ${money(p.price)}</span></span>
+        <button data-remove="${esc(p.sku)}" class="text-xs text-slate-400 hover:text-rose-600">Retirer</button>
+      </li>`).join('');
+    $('cartEmpty').classList.toggle('hidden', lines.length > 0);
+    $('cartTotal').textContent = money(lines.reduce((s, l) => s + Number(l.p.price) * l.qty, 0));
+    $('checkout').disabled = lines.length === 0;
+    document.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => { cart.delete(b.dataset.remove); renderCart(); }));
+  }
+
+  $('checkout').addEventListener('click', async () => {
+    $('checkout').disabled = true;
+    $('checkoutMsg').textContent = '';
+    try {
+      const r = await api('/api/orders', { json: {
+        customerId: $('customer').value.trim() || 'CLI-001',
+        shippingAddress: $('address').value.trim(),
+        items: [...cart.entries()].map(([sku, quantity]) => ({ sku, quantity }))
+      } });
+      myOrders.unshift(r.orderId);
+      saveOrders();
+      cart.clear();
+      renderCart();
+      $('checkoutMsg').innerHTML = `<span class="text-emerald-700">Commande <b>${esc(r.orderId)}</b> transmise au bus d'intégration.</span>`;
+      renderOrders();
+    } catch (e) {
+      $('checkoutMsg').innerHTML = `<span class="text-rose-600">${esc(e.message)}</span>`;
+      $('checkout').disabled = false;
+    }
+  });
+
+  // Suivi : étapes visibles par le client, mises à jour par les événements du bus.
+  const STEPS = [
+    { key: 'RECEIVED', text: 'Reçue' },
+    { key: 'INVOICED', text: 'Stock confirmé · facturée' },
+    { key: 'DELIVERY_ASSIGNED', text: 'Livreur assigné' },
+    { key: 'IN_DELIVERY', text: 'En livraison' },
+    { key: 'DELIVERED', text: 'Livrée' }
+  ];
+  const RANK = { RECEIVED: 0, VALIDATING: 0, RETRYING: 0, STOCK_RESERVED: 0, INVOICED: 1, DELIVERY_ASSIGNED: 2, IN_DELIVERY: 3, DELIVERED: 4 };
+
+  async function renderOrders() {
+    if (!myOrders.length) return;
+    const orders = (await Promise.all(myOrders.map((id) => api('/api/orders/' + id).catch(() => null)))).filter(Boolean);
+    $('myOrders').innerHTML = orders.map((o) => {
+      const rejected = o.status === 'REJECTED_OUT_OF_STOCK';
+      const failed = o.status === 'FAILED';
+      const rank = RANK[o.status] ?? -1;
+      const steps = STEPS.map((s, i) => {
+        const done = !rejected && !failed && i <= rank;
+        return `<li class="flex-1"><div class="h-1.5 rounded-full ${done ? 'bg-blue-600' : 'bg-slate-200'}"></div>
+          <p class="mt-1 text-[11px] ${done ? 'text-slate-800' : 'text-slate-400'}">${s.text}</p></li>`;
+      }).join('');
+      const note = rejected
+        ? `<p class="mt-3 rounded-lg bg-rose-50 border border-rose-200 p-2 text-sm text-rose-700">Commande refusée : ${esc(o.status_reason)}</p>`
+        : failed ? `<p class="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-2 text-sm text-amber-800">Incident technique, la commande est mise en attente par nos équipes (${esc(o.status_reason)}).</p>`
+        : o.status === 'RETRYING' ? `<p class="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-2 text-sm text-amber-800">L'ERP ne répond pas, nouvelle tentative en cours…</p>` : '';
+      return `<article class="rounded-2xl bg-white border border-slate-200 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <p class="font-mono font-semibold">${esc(o.order_id)}</p>
+          <p class="text-sm"><span class="text-slate-500">${(o.items || []).map((i) => i.quantity + ' × ' + esc(i.sku)).join(', ')}</span> · <b>${money(o.total)}</b></p>
+        </div>
+        <p class="text-xs text-slate-500">Statut : <b>${esc(label(o.status))}</b> · mis à jour à ${time(o.updated_at)}</p>
+        <ol class="mt-3 flex gap-2">${steps}</ol>${note}
+      </article>`;
+    }).join('');
+  }
+
+  const refreshOrders = debounce(renderOrders, 300);
+  const refreshCatalog = debounce(loadCatalog, 500);
+  connectLive((ev) => {
+    if (ev.order_id && myOrders.includes(ev.order_id)) refreshOrders();
+    if (['STOCK_RESERVED', 'DELIVERED', 'REJECTED_OUT_OF_STOCK'].includes(ev.status)) refreshCatalog();
+  });
+
+  loadCatalog();
+  renderOrders();
+})();
+</script>
+</body>
+</html>

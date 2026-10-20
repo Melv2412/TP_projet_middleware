@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: sidam_postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sidam_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d sidam_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: sidam_rabbitmq
+    # Nom d'hôte fixe : RabbitMQ y rattache ses données (les files survivent aux redémarrages).
+    hostname: sidam-rabbitmq
+    # L'utilisateur "guest" ne peut se connecter que depuis localhost :
+    # on crée donc un utilisateur dédié pour le bus.
+    environment:
+      RABBITMQ_DEFAULT_USER: sidam
+      RABBITMQ_DEFAULT_PASS: sidam
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    # On teste simplement le port AMQP. Ne pas utiliser "rabbitmq-diagnostics" ici :
+    # lancé en root avant le serveur, il crée un .erlang.cookie illisible par RabbitMQ.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5672"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      # Le premier démarrage de RabbitMQ peut prendre plusieurs minutes sur un PC portable.
+      start_period: 240s
+
+  integration-bus:
+    build: ./integration-bus
+    container_name: sidam_bus
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sidam_db
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: sidam
+      SPRING_RABBITMQ_PASSWORD: sidam
+      DEMO_MODE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  rabbitdata:

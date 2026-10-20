@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIDAM Legacy ERP</title>
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/assets/sidam.js"></script>
+  <style>
+    body { font-family: Tahoma, Verdana, "Segoe UI", sans-serif; }
+    .bevel { box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 #808080; }
+    .tab-on { background: #fff; border-bottom-color: #fff; font-weight: bold; }
+    table.legacy td, table.legacy th { border: 1px solid #a0a0a0; padding: 2px 6px; }
+    table.legacy tr:nth-child(even) td { background: #eef3fb; }
+  </style>
+</head>
+<body class="min-h-screen bg-[#3a6ea5] p-2 sm:p-6 text-[13px] text-black">
+  <div class="max-w-6xl mx-auto bg-[#d4d0c8] border border-[#808080] shadow-xl">
+    <!-- Barre de titre façon logiciel des années 2000 -->
+    <div class="flex items-center justify-between bg-gradient-to-r from-[#0a246a] to-[#a6caf0] px-2 py-1 text-white">
+      <span class="font-bold">SIDAM-ERP v4.2 — Gestion Stock &amp; Facturation <span class="font-normal opacity-80">(système historique)</span></span>
+      <a href="/" class="bevel bg-[#d4d0c8] text-black px-2 text-xs">✕</a>
+    </div>
+    <div class="flex flex-wrap gap-4 border-b border-[#808080] px-2 py-1 text-xs">
+      <span><u>F</u>ichier</span><span><u>S</u>tock</span><span><u>V</u>entes</span><span><u>F</u>acturation</span><span><u>I</u>mport</span><span>?</span>
+    </div>
+
+    <div id="downBanner" class="hidden m-2 border-2 border-red-700 bg-[#ffe4e1] p-2 text-red-800 font-bold">
+      ⚠ SERVEUR ERP HORS LIGNE (panne simulée depuis la Control Tower) — les connexions du bus sont refusées.
+    </div>
+
+    <div class="px-2 pt-2 flex gap-1 text-xs">
+      <button data-tab="stock" class="tab bevel border border-[#808080] px-3 py-1 bg-[#d4d0c8]">Stock</button>
+      <button data-tab="orders" class="tab bevel border border-[#808080] px-3 py-1 bg-[#d4d0c8]">Commandes reçues (XML)</button>
+      <button data-tab="invoices" class="tab bevel border border-[#808080] px-3 py-1 bg-[#d4d0c8]">Factures</button>
+      <button data-tab="csv" class="tab bevel border border-[#808080] px-3 py-1 bg-[#d4d0c8]">Import CSV</button>
+    </div>
+
+    <div class="m-2 mt-0 border border-[#808080] bg-white p-3 min-h-[420px] overflow-x-auto">
+      <!-- Stock -->
+      <section data-panel="stock">
+        <p class="mb-2 font-bold">Inventaire des articles</p>
+        <table class="legacy w-full border-collapse text-xs">
+          <thead class="bg-[#d4d0c8]"><tr><th>Code article</th><th>Désignation</th><th class="text-right">Prix unitaire</th><th class="text-right">Disponible</th><th class="text-right">Réservé</th><th>Dernière MAJ</th></tr></thead>
+          <tbody id="stockRows"></tbody>
+        </table>
+        <p class="mt-2 text-[11px] text-gray-600">« Réservé » : marchandise vendue, en attente de livraison. Elle sort du stock quand le livreur confirme la livraison.</p>
+      </section>
+
+      <!-- Commandes -->
+      <section data-panel="orders" class="hidden">
+        <p class="mb-2 font-bold">Commandes intégrées par le bus (format XML legacy)</p>
+        <div class="grid gap-3 lg:grid-cols-2">
+          <table class="legacy w-full border-collapse text-xs self-start">
+            <thead class="bg-[#d4d0c8]"><tr><th>Réf.</th><th>Client</th><th>Statut</th><th>Reçue le</th><th></th></tr></thead>
+            <tbody id="orderRows"></tbody>
+          </table>
+          <div>
+            <p class="text-xs font-bold">Document XML reçu</p>
+            <pre id="xml" class="mt-1 h-80 overflow-auto border border-[#808080] bg-[#ffffe1] p-2 text-[11px] font-mono">Sélectionnez une commande.</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Factures -->
+      <section data-panel="invoices" class="hidden">
+        <p class="mb-2 font-bold">Journal des factures</p>
+        <table class="legacy w-full border-collapse text-xs">
+          <thead class="bg-[#d4d0c8]"><tr><th>N° facture</th><th>Commande</th><th>Client</th><th class="text-right">Montant</th><th>Émise le</th><th>État commande</th></tr></thead>
+          <tbody id="invoiceRows"></tbody>
+        </table>
+      </section>
+
+      <!-- Import CSV -->
+      <section data-panel="csv" class="hidden">
+        <p class="mb-2 font-bold">Import de commandes au format fichier plat (CSV)</p>
+        <p class="text-xs text-gray-700">Format historique : <code>order_id,sku,quantity,unit_price</code>. Le fichier est transmis au bus, qui le convertit et le traite comme une commande du site.</p>
+        <textarea id="csvText" rows="7" class="mt-2 w-full border border-[#808080] p-2 font-mono text-xs">order_id,sku,quantity,unit_price
+CMD-2026-0042,TV-SAM-55,1,350000
+CMD-2026-0042,FR-LG-01,1,425000</textarea>
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <input id="csvFile" type="file" accept=".csv,text/csv,text/plain">
+          <button id="csvSend" class="bevel border border-[#808080] bg-[#d4d0c8] px-4 py-1 font-bold">Importer</button>
+        </div>
+        <pre id="csvResult" class="mt-3 text-xs"></pre>
+      </section>
+    </div>
+    <div class="flex justify-between border-t border-[#808080] px-2 py-0.5 text-[11px]">
+      <span id="statusBar">Prêt</span><span id="clock"></span>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const { api, connectLive, debounce, esc, money, dateTime, pretty } = Sidam;
+  const $ = (id) => document.getElementById(id);
+
+  // Onglets
+  function show(tab) {
+    document.querySelectorAll('[data-panel]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab));
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('tab-on', t.dataset.tab === tab));
+  }
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => show(t.dataset.tab)));
+  show('stock');
+
+  const ETAT = { RESERVED: 'RÉSERVÉE', INVOICED: 'FACTURÉE', DELIVERED: 'LIVRÉE' };
+
+  async function load() {
+    const [stock, orders, health] = await Promise.all([api('/api/erp/inventory'), api('/api/erp/orders'), api('/api/tower/health')]);
+    $('downBanner').classList.toggle('hidden', health.erpAvailable);
+    $('stockRows').innerHTML = stock.map((s) => `<tr>
+      <td class="font-mono">${esc(s.sku)}</td><td>${esc(s.name)}</td><td class="text-right">${money(s.unit_price)}</td>
+      <td class="text-right font-bold ${s.available === 0 ? 'text-red-700' : ''}">${s.available}</td><td class="text-right">${s.reserved}</td>
+      <td>${dateTime(s.updated_at)}</td></tr>`).join('');
+    $('orderRows').innerHTML = orders.map((o) => `<tr class="cursor-pointer hover:bg-[#cfe0ff]" data-ref="${esc(o.ref)}">
+      <td class="font-mono">${esc(o.ref)}</td><td>${esc(o.customer_id)}</td><td>${esc(ETAT[o.status] || o.status)}</td>
+      <td>${dateTime(o.received_at)}</td><td class="text-blue-800 underline">XML</td></tr>`).join('')
+      || '<tr><td colspan="5" class="text-gray-500">Aucune commande reçue.</td></tr>';
+    $('invoiceRows').innerHTML = orders.filter((o) => o.invoice_no).map((o) => `<tr>
+      <td class="font-mono">${esc(o.invoice_no)}</td><td class="font-mono">${esc(o.ref)}</td><td>${esc(o.customer_id)}</td>
+      <td class="text-right">${money(o.total)}</td><td>${dateTime(o.issued_at)}</td><td>${esc(ETAT[o.status] || o.status)}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="text-gray-500">Aucune facture.</td></tr>';
+    document.querySelectorAll('[data-ref]').forEach((r) => r.addEventListener('click', () => {
+      const o = orders.find((x) => x.ref === r.dataset.ref);
+      $('xml').textContent = pretty(o.xml_payload, 'XML');
+    }));
+    $('statusBar').textContent = `${stock.length} articles · ${orders.length} commandes · ${orders.filter((o) => o.invoice_no).length} factures`;
+  }
+
+  $('csvFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (f) $('csvText').value = await f.text();
+  });
+  $('csvSend').addEventListener('click', async () => {
+    $('csvResult').textContent = 'Transmission au bus…';
+    try {
+      const r = await fetch('/api/orders/import-csv', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: $('csvText').value });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Erreur ' + r.status);
+      $('csvResult').textContent = 'Import accepté par le bus :\n' +
+        data.imported.map((i) => `  ${i.csvOrderId}  →  commande ${i.orderId}`).join('\n');
+    } catch (e) {
+      $('csvResult').textContent = 'ERREUR : ' + e.message;
+    }
+  });
+
+  const refresh = debounce(() => load().catch((e) => { $('statusBar').textContent = 'Erreur : ' + e.message; }), 400);
+  connectLive((ev) => {
+    if ([ev.source, ev.destination].some((s) => s === 'ERP' || s === 'ERP_CSV')) refresh();
+  });
+  setInterval(() => { $('clock').textContent = new Date().toLocaleString('fr-FR'); }, 1000);
+  setInterval(refresh, 5000);   // reflète aussi la panne simulée
+  load();
+})();
+</script>
+</body>
+</html>

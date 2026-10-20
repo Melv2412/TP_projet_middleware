@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#047857">
+  <title>SIDAM Delivery</title>
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/assets/sidam.js"></script>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
+  <div class="max-w-md mx-auto min-h-screen bg-white shadow-sm flex flex-col">
+    <header class="bg-emerald-700 text-white px-4 pt-5 pb-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-widest text-emerald-200">SIDAM Delivery</p>
+          <h1 class="text-xl font-bold">Mes missions</h1>
+        </div>
+        <span id="live" class="text-[11px] text-emerald-200">● …</span>
+      </div>
+      <label class="mt-3 flex items-center gap-2 text-sm">
+        <span class="text-emerald-100">Livreur</span>
+        <input id="driver" class="flex-1 rounded-lg bg-emerald-800/60 border border-emerald-500 px-3 py-1.5 text-white placeholder-emerald-300 focus:outline-none" placeholder="Votre nom">
+      </label>
+    </header>
+
+    <nav class="grid grid-cols-3 border-b border-slate-200 text-sm font-medium">
+      <button data-tab="ASSIGNED" class="tab py-3">À prendre <span id="cA" class="ml-1 rounded-full bg-slate-200 px-2 text-xs">0</span></button>
+      <button data-tab="IN_DELIVERY" class="tab py-3">En cours <span id="cI" class="ml-1 rounded-full bg-slate-200 px-2 text-xs">0</span></button>
+      <button data-tab="DELIVERED" class="tab py-3">Livrées <span id="cD" class="ml-1 rounded-full bg-slate-200 px-2 text-xs">0</span></button>
+    </nav>
+
+    <main id="missions" class="flex-1 p-4 space-y-4"></main>
+    <p id="msg" class="px-4 pb-4 text-sm"></p>
+    <footer class="px-4 py-3 text-center text-[11px] text-slate-400 border-t border-slate-100">
+      Les missions arrivent du bus d'intégration (RabbitMQ). <a href="/" class="underline">SIDAM CONNECT</a>
+    </footer>
+  </div>
+
+<script>
+(() => {
+  const { api, connectLive, debounce, esc, money, time } = Sidam;
+  const $ = (id) => document.getElementById(id);
+  let tab = 'ASSIGNED';
+  let missions = [];
+
+  try { $('driver').value = localStorage.getItem('sidam.driver') || 'Koffi'; } catch (e) { $('driver').value = 'Koffi'; }
+  $('driver').addEventListener('change', () => { try { localStorage.setItem('sidam.driver', $('driver').value); } catch (e) { /* facultatif */ } });
+
+  function setTab(t) {
+    tab = t;
+    document.querySelectorAll('.tab').forEach((b) => {
+      const on = b.dataset.tab === t;
+      b.className = 'tab py-3 border-b-2 ' + (on ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500');
+    });
+    render();
+  }
+  document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  async function load() {
+    missions = await api('/api/deliveries');
+    $('cA').textContent = missions.filter((m) => m.status === 'ASSIGNED').length;
+    $('cI').textContent = missions.filter((m) => m.status === 'IN_DELIVERY').length;
+    $('cD').textContent = missions.filter((m) => m.status === 'DELIVERED').length;
+    render();
+  }
+
+  function render() {
+    const list = missions.filter((m) => m.status === tab);
+    if (!list.length) {
+      $('missions').innerHTML = `<p class="py-12 text-center text-slate-400 text-sm">${
+        tab === 'ASSIGNED' ? 'Aucune nouvelle mission.' : tab === 'IN_DELIVERY' ? 'Aucune livraison en cours.' : 'Aucune livraison terminée.'}</p>`;
+      return;
+    }
+    $('missions').innerHTML = list.map((m) => {
+      let parcels = [];
+      try { parcels = JSON.parse(m.parcels); } catch (e) { parcels = []; }
+      const action = m.status === 'ASSIGNED'
+        ? `<button data-pickup="${esc(m.mission_id)}" class="w-full rounded-xl bg-emerald-600 active:bg-emerald-700 text-white text-base font-semibold py-4">Prendre en charge</button>`
+        : m.status === 'IN_DELIVERY'
+          ? `<button data-confirm="${esc(m.mission_id)}" class="w-full rounded-xl bg-blue-600 active:bg-blue-700 text-white text-base font-semibold py-4">Confirmer la livraison</button>`
+          : `<p class="text-center text-sm text-emerald-700 font-medium">✓ Livrée à ${time(m.delivered_at)} par ${esc(m.driver)}</p>`;
+      return `<article class="rounded-2xl border border-slate-200 p-4 shadow-sm">
+        <div class="flex justify-between text-xs text-slate-500"><span class="font-mono">${esc(m.mission_id)}</span><span>${esc(m.order_id)}</span></div>
+        <p class="mt-2 text-lg font-semibold leading-tight">${esc(m.address || 'Adresse non renseignée')}</p>
+        <p class="text-sm text-slate-500">Client ${esc(m.customer_id)} · ${money(m.amount)}</p>
+        <ul class="mt-3 space-y-1 text-sm">${parcels.map((p) => `<li class="flex justify-between"><span>${esc(p.designation)}</span><span class="text-slate-500">× ${p.quantite}</span></li>`).join('')}</ul>
+        ${m.driver && m.status === 'IN_DELIVERY' ? `<p class="mt-2 text-xs text-slate-500">Pris en charge par ${esc(m.driver)} à ${time(m.picked_up_at)}</p>` : ''}
+        <div class="mt-4">${action}</div>
+      </article>`;
+    }).join('');
+    document.querySelectorAll('[data-pickup]').forEach((b) => b.addEventListener('click', () => act(b, 'pickup')));
+    document.querySelectorAll('[data-confirm]').forEach((b) => b.addEventListener('click', () => act(b, 'confirm')));
+  }
+
+  async function act(button, action) {
+    button.disabled = true;
+    button.textContent = 'Envoi…';
+    const id = button.dataset.pickup || button.dataset.confirm;
+    try {
+      await api(`/api/deliveries/${id}/${action}`, action === 'pickup' ? { json: { driver: $('driver').value || 'Livreur SIDAM' } } : { method: 'POST' });
+      $('msg').innerHTML = `<span class="text-emerald-700">${action === 'pickup' ? 'Mission prise en charge.' : 'Livraison confirmée, statut envoyé au bus.'}</span>`;
+      if (action === 'pickup') setTab('IN_DELIVERY');
+    } catch (e) {
+      $('msg').innerHTML = `<span class="text-rose-600">${esc(e.message)}</span>`;
+    }
+    load();
+  }
+
+  const refresh = debounce(() => load().catch(console.error), 300);
+  connectLive((ev) => {
+    if (ev.source === 'DELIVERY' || ev.destination === 'DELIVERY') refresh();
+  }, (up) => { $('live').textContent = up ? '● en ligne' : '● hors ligne'; });
+
+  setTab('ASSIGNED');
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIDAM CONNECT</title>
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/assets/sidam.js"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
+  <main class="max-w-5xl mx-auto px-4 py-12">
+    <p class="text-cyan-400 text-sm font-semibold tracking-widest uppercase">Bus d'intégration · SIDAM Group</p>
+    <h1 class="mt-2 text-4xl font-bold">SIDAM CONNECT</h1>
+    <p class="mt-2 text-slate-400">Three systems. One intelligent ecosystem.</p>
+
+    <div class="mt-10 grid gap-4 sm:grid-cols-2">
+      <a href="/tower.html" class="group rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-slate-900 to-cyan-950/40 p-6 hover:border-cyan-400 transition sm:col-span-2">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Control Tower</h2>
+          <span class="text-cyan-400 group-hover:translate-x-1 transition">→</span>
+        </div>
+        <p class="mt-2 text-sm text-slate-400">Supervision en temps réel : flux des messages, transformations JSON ⇄ XML, Dead Letter Queue, simulation de pannes.</p>
+      </a>
+      <a href="/store.html" class="group rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-blue-400 transition">
+        <h2 class="text-lg font-semibold">SIDAM Store <span class="ml-2 text-xs text-blue-300 font-mono">JSON</span></h2>
+        <p class="mt-2 text-sm text-slate-400">Le site e-commerce : catalogue, panier, suivi de commande.</p>
+      </a>
+      <a href="/erp.html" class="group rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-amber-400 transition">
+        <h2 class="text-lg font-semibold">SIDAM Legacy ERP <span class="ml-2 text-xs text-amber-300 font-mono">XML · CSV</span></h2>
+        <p class="mt-2 text-sm text-slate-400">L'ERP historique : stock, commandes reçues en XML, factures, import CSV.</p>
+      </a>
+      <a href="/delivery.html" class="group rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-emerald-400 transition">
+        <h2 class="text-lg font-semibold">SIDAM Delivery <span class="ml-2 text-xs text-emerald-300 font-mono">JSON</span></h2>
+        <p class="mt-2 text-sm text-slate-400">L'application des livreurs (à ouvrir sur un téléphone).</p>
+      </a>
+      <a href="http://localhost:15672" target="_blank" rel="noopener" class="group rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-orange-400 transition">
+        <h2 class="text-lg font-semibold">RabbitMQ <span class="ml-2 text-xs text-orange-300 font-mono">sidam / sidam</span></h2>
+        <p class="mt-2 text-sm text-slate-400">Console du broker : files, messages en attente, DLQ.</p>
+      </a>
+    </div>
+
+    <p id="health" class="mt-10 text-sm text-slate-500">Vérification des services…</p>
+  </main>
+  <script>
+    Sidam.api('/api/tower/health').then((h) => {
+      const ok = (b) => b ? '<span class="text-emerald-400">●</span>' : '<span class="text-rose-400">●</span>';
+      document.getElementById('health').innerHTML =
+        `${ok(h.database)} PostgreSQL &nbsp; ${ok(h.rabbitmq)} RabbitMQ &nbsp; ${ok(h.erpAvailable)} ERP &nbsp; ` +
+        `<span class="text-emerald-400">●</span> ${h.camelRoutes.filter((r) => r.status === 'Started').length} routes Camel actives`;
+    }).catch(() => { document.getElementById('health').textContent = 'Bus injoignable.'; });
+  </script>
+</body>
+</html>
